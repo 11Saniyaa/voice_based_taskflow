@@ -1,22 +1,24 @@
 {
-  "name": "voice-task-manager",
-  "version": "0.1.0",
+  "name": "taskflow-ai-professional",
+  "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "next lint"
   },
   "dependencies": {
-    "lucide-react": "^0.542.0",
-    "next": "15.5.2",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "next": "14.0.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "axios": "^1.6.0",
+    "date-fns": "^2.30.0",
+    "framer-motion": "^10.16.0",
+    "lucide-react": "^0.263.1"
   },
   "devDependencies": {
-    "@eslint/eslintrc": "^3",
-    "eslint": "^9",
-    "eslint-config-next": "15.5.2"
+    "eslint": "^8.52.0",
+    "eslint-config-next": "14.0.0"
   }
 }
