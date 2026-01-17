@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Mic, MicOff, Plus, Trash2, Check, Calendar, Search } from 'lucide-react';
 
 export default function TaskFlowAI() {
@@ -13,49 +13,17 @@ export default function TaskFlowAI() {
   const [search, setSearch] = useState('');
   const recognitionRef = useRef(null);
 
-  // --- Voice Recognition Setup ---
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-      if (!SpeechRecognition) {
-        console.warn("Speech recognition not supported in this browser.");
-        return;
-      }
-
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.lang = "en-US";
-
-      recognitionRef.current.onresult = (event) => {
-        const command = event.results[0][0].transcript;
-        setTranscript(command);
-        handleVoiceCommand(command);
-      };
-
-      recognitionRef.current.onerror = () => setIsListening(false);
-      recognitionRef.current.onend = () => setIsListening(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (recognitionRef.current) {
-      if (isListening) recognitionRef.current.start();
-      else recognitionRef.current.stop();
-    }
-  }, [isListening]);
-
   // --- Speak Feedback ---
-  const speak = (text) => {
+  const speak = useCallback((text) => {
     if ('speechSynthesis' in window) {
       const utter = new SpeechSynthesisUtterance(text);
       utter.lang = "en-US";
       window.speechSynthesis.speak(utter);
     }
-  };
+  }, []);
 
   // --- Handle Commands ---
-  const handleVoiceCommand = (command) => {
+  const handleVoiceCommand = useCallback((command) => {
     const text = command.toLowerCase();
 
     if (text.startsWith("add task")) {
@@ -86,7 +54,32 @@ export default function TaskFlowAI() {
     } else {
       setFeedback(`⚠️ Unknown command: "${command}"`);
     }
-  };
+  }, [speak]);
+
+  // --- Voice Recognition Setup ---
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      if (!SpeechRecognition) {
+        console.warn("Speech recognition not supported in this browser.");
+        return;
+      }
+
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = "en-US";
+
+      recognitionRef.current.onresult = (event) => {
+        const command = event.results[0][0].transcript;
+        setTranscript(command);
+        handleVoiceCommand(command);
+      };
+
+      recognitionRef.current.onerror = () => setIsListening(false);
+      recognitionRef.current.onend = () => setIsListening(false);
+    }
+  }, [handleVoiceCommand]);
 
   // Stats
   const completedCount = tasks.filter(t => t.completed).length;
