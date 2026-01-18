@@ -12,51 +12,282 @@ export default function TaskFlowAI() {
   const [sort, setSort] = useState('created');
   const [search, setSearch] = useState('');
   const recognitionRef = useRef(null);
+  const tasksRef = useRef(tasks);
+  
+  // Keep tasksRef in sync
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
 
   const speak = useCallback((text) => {
     if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Cancel any ongoing speech
       const utter = new SpeechSynthesisUtterance(text);
       utter.lang = "en-US";
+      utter.rate = 1.0;
+      utter.pitch = 1.0;
       window.speechSynthesis.speak(utter);
     }
   }, []);
 
-  const handleVoiceCommand = useCallback((command) => {
-    const text = command.toLowerCase();
+  // Natural language date parsing
+  const parseNaturalDate = useCallback((text) => {
+    const now = new Date();
+    const lowerText = text.toLowerCase();
+    let date = new Date(now);
+    
+    // Time patterns
+    const timeMatch = lowerText.match(/(\d{1,2})\s*(am|pm|:(\d{2}))?/);
+    let hours = now.getHours();
+    let minutes = 0;
+    
+    if (timeMatch) {
+      const hour = parseInt(timeMatch[1]);
+      const isPM = lowerText.includes('pm') || (hour < 12 && lowerText.includes('p'));
+      const isAM = lowerText.includes('am') || (hour === 12 && lowerText.includes('a'));
+      
+      if (timeMatch[3]) {
+        minutes = parseInt(timeMatch[3]);
+      }
+      
+      if (isPM && hour !== 12) {
+        hours = hour + 12;
+      } else if (isAM && hour === 12) {
+        hours = 0;
+      } else if (!isPM && !isAM) {
+        hours = hour;
+      } else {
+        hours = hour;
+      }
+    }
+    
+    // Date patterns
+    if (lowerText.includes('today')) {
+      date = new Date(now);
+    } else if (lowerText.includes('tomorrow')) {
+      date = new Date(now);
+      date.setDate(date.getDate() + 1);
+    } else if (lowerText.includes('next week')) {
+      date = new Date(now);
+      date.setDate(date.getDate() + 7);
+    } else if (lowerText.includes('next month')) {
+      date = new Date(now);
+      date.setMonth(date.getMonth() + 1);
+    } else if (lowerText.match(/\d{1,2}\/\d{1,2}/)) {
+      const dateMatch = lowerText.match(/(\d{1,2})\/(\d{1,2})/);
+      if (dateMatch) {
+        const month = parseInt(dateMatch[1]) - 1;
+        const day = parseInt(dateMatch[2]);
+        date = new Date(now.getFullYear(), month, day);
+      }
+    } else if (lowerText.includes('monday') || lowerText.includes('tuesday') || 
+               lowerText.includes('wednesday') || lowerText.includes('thursday') ||
+               lowerText.includes('friday') || lowerText.includes('saturday') || 
+               lowerText.includes('sunday')) {
+      const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+      const targetDay = days.find(d => lowerText.includes(d));
+      const targetDayIndex = days.indexOf(targetDay);
+      const currentDay = now.getDay();
+      let daysToAdd = targetDayIndex - currentDay;
+      if (daysToAdd <= 0) daysToAdd += 7;
+      date = new Date(now);
+      date.setDate(date.getDate() + daysToAdd);
+    }
+    
+    if (timeMatch) {
+      date.setHours(hours, minutes, 0, 0);
+    } else if (!lowerText.includes('today') && !lowerText.includes('tomorrow') && 
+               !lowerText.includes('next') && !lowerText.match(/\d{1,2}\/\d{1,2}/) &&
+               !lowerText.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/)) {
+      return null; // No date found
+    }
+    
+    return date.toISOString().slice(0, 16);
+  }, []);
 
-    if (text.startsWith("add task")) {
-      const newText = text.replace("add task", "").trim();
-      if (newText) {
+  const handleVoiceCommand = useCallback((command) => {
+    const text = command.toLowerCase().trim();
+    let response = '';
+
+    // Add task with natural language parsing
+    if (text.includes("add task") || text.includes("create task") || text.includes("new task")) {
+      let taskText = text.replace(/(add|create|new)\s+task\s+(to|for)?/i, "").trim();
+      
+      // Extract date/time info
+      const datePatterns = [
+        /(today|tomorrow|next week|next month)/i,
+        /(\d{1,2}\/\d{1,2})/,
+        /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+        /(\d{1,2})\s*(am|pm)/i,
+        /at\s+(\d{1,2}):?(\d{2})?\s*(am|pm)?/i
+      ];
+      
+      let dueDate = null;
+      let dateText = '';
+      
+      for (const pattern of datePatterns) {
+        const match = taskText.match(pattern);
+        if (match) {
+          dateText = match[0];
+          dueDate = parseNaturalDate(taskText);
+          taskText = taskText.replace(match[0], "").trim();
+          break;
+        }
+      }
+      
+      // Clean up common words
+      taskText = taskText.replace(/\b(to|for|on|at|by)\b/gi, "").trim();
+      
+      if (taskText) {
         setTasks(prev => [...prev, {
           id: Date.now(),
-          text: newText,
+          text: taskText,
           completed: false,
           createdAt: new Date(),
-          dueDate: null
+          dueDate: dueDate
         }]);
-        setFeedback(`Added: ${newText}`);
-        setTimeout(() => setFeedback(''), 3000);
-        speak("Task added");
+        response = `Added task: ${taskText}${dueDate ? ` for ${dateText}` : ''}`;
+        setFeedback(response);
+        setTimeout(() => setFeedback(''), 4000);
+        speak(`Task added: ${taskText}${dueDate ? ` scheduled for ${dateText}` : ''}`);
       }
-    } else if (text.startsWith("complete task")) {
-      const name = text.replace("complete task", "").trim();
-      setTasks(prev => prev.map(t =>
-        t.text.toLowerCase().includes(name) ? { ...t, completed: true } : t
-      ));
-      setFeedback(`Completed: ${name}`);
-      setTimeout(() => setFeedback(''), 3000);
-      speak("Task completed");
-    } else if (text.startsWith("delete task")) {
-      const name = text.replace("delete task", "").trim();
-      setTasks(prev => prev.filter(t => !t.text.toLowerCase().includes(name)));
-      setFeedback(`Deleted: ${name}`);
-      setTimeout(() => setFeedback(''), 3000);
-      speak("Task deleted");
-    } else {
-      setFeedback(`Unknown: "${command}"`);
-      setTimeout(() => setFeedback(''), 3000);
     }
-  }, [speak]);
+    // Complete task
+    else if (text.includes("complete task") || text.includes("finish task") || text.includes("done task")) {
+      const name = text.replace(/(complete|finish|done)\s+task\s+/i, "").trim();
+      setTasks(prev => {
+        const completedTasks = prev.filter(t => t.text.toLowerCase().includes(name) && !t.completed);
+        if (completedTasks.length > 0) {
+          const updated = prev.map(t => {
+            if (t.text.toLowerCase().includes(name) && !t.completed) {
+              return { ...t, completed: true };
+            }
+            return t;
+          });
+          setTimeout(() => {
+            setFeedback(`Completed: ${completedTasks[0].text}`);
+            speak(`Task completed: ${completedTasks[0].text}`);
+            setTimeout(() => setFeedback(''), 3000);
+          }, 0);
+          return updated;
+        } else {
+          setTimeout(() => {
+            setFeedback(`No matching task found: ${name}`);
+            speak("No matching task found");
+            setTimeout(() => setFeedback(''), 3000);
+          }, 0);
+          return prev;
+        }
+      });
+    }
+    // Delete task
+    else if (text.includes("delete task") || text.includes("remove task")) {
+      const name = text.replace(/(delete|remove)\s+task\s+/i, "").trim();
+      setTasks(prev => {
+        const deletedTasks = prev.filter(t => t.text.toLowerCase().includes(name));
+        if (deletedTasks.length > 0) {
+          setTimeout(() => {
+            setFeedback(`Deleted: ${deletedTasks[0].text}`);
+            speak(`Task deleted: ${deletedTasks[0].text}`);
+            setTimeout(() => setFeedback(''), 3000);
+          }, 0);
+          return prev.filter(t => !t.text.toLowerCase().includes(name));
+        } else {
+          setTimeout(() => {
+            setFeedback(`No matching task found: ${name}`);
+            speak("No matching task found");
+            setTimeout(() => setFeedback(''), 3000);
+          }, 0);
+          return prev;
+        }
+      });
+    }
+    // Show pending tasks
+    else if (text.includes("show pending") || text.includes("pending tasks") || text.includes("what's pending")) {
+      const currentTasks = tasksRef.current;
+      const pending = currentTasks.filter(t => !t.completed);
+      if (pending.length === 0) {
+        response = "No pending tasks";
+        setFeedback(response);
+        setTimeout(() => setFeedback(''), 3000);
+        speak("You have no pending tasks");
+      } else {
+        setFilter('pending');
+        const taskList = pending.slice(0, 5).map(t => t.text).join(", ");
+        response = `You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}`;
+        setFeedback(response);
+        setTimeout(() => setFeedback(''), 4000);
+        speak(`You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}. ${taskList}`);
+      }
+    }
+    // Show overdue tasks
+    else if (text.includes("overdue") || text.includes("what's overdue") || text.includes("show overdue")) {
+      const currentTasks = tasksRef.current;
+      const overdue = currentTasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && !t.completed);
+      if (overdue.length === 0) {
+        response = "No overdue tasks";
+        setFeedback(response);
+        setTimeout(() => setFeedback(''), 3000);
+        speak("You have no overdue tasks");
+      } else {
+        const taskList = overdue.slice(0, 5).map(t => t.text).join(", ");
+        response = `You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}`;
+        setFeedback(response);
+        setTimeout(() => setFeedback(''), 4000);
+        speak(`You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}. ${taskList}`);
+      }
+    }
+    // Mark all as done
+    else if (text.includes("mark all") && (text.includes("done") || text.includes("complete"))) {
+      setTasks(prev => {
+        const pending = prev.filter(t => !t.completed);
+        const updated = prev.map(t => ({ ...t, completed: true }));
+        const pendingCount = pending.length;
+        setTimeout(() => {
+          setFeedback(`Marked all ${pendingCount} tasks as completed`);
+          speak(`All ${pendingCount} tasks marked as completed`);
+          setTimeout(() => setFeedback(''), 3000);
+        }, 0);
+        return updated;
+      });
+    }
+    // Show all tasks
+    else if (text.includes("show all") || text.includes("list all") || text.includes("all tasks")) {
+      const currentTasks = tasksRef.current;
+      setFilter('all');
+      response = `Showing all ${currentTasks.length} tasks`;
+      setFeedback(response);
+      setTimeout(() => setFeedback(''), 3000);
+      speak(`You have ${currentTasks.length} total tasks`);
+    }
+    // Show completed tasks
+    else if (text.includes("show completed") || text.includes("completed tasks")) {
+      const currentTasks = tasksRef.current;
+      const completed = currentTasks.filter(t => t.completed);
+      setFilter('completed');
+      response = `Showing ${completed.length} completed tasks`;
+      setFeedback(response);
+      setTimeout(() => setFeedback(''), 3000);
+      speak(`You have ${completed.length} completed tasks`);
+    }
+    // Task count
+    else if (text.includes("how many") || text.includes("task count") || text.includes("how many tasks")) {
+      const currentTasks = tasksRef.current;
+      const pending = currentTasks.filter(t => !t.completed).length;
+      const completed = currentTasks.filter(t => t.completed).length;
+      response = `You have ${currentTasks.length} total tasks, ${pending} pending, and ${completed} completed`;
+      setFeedback(response);
+      setTimeout(() => setFeedback(''), 4000);
+      speak(`You have ${currentTasks.length} total tasks. ${pending} pending and ${completed} completed`);
+    }
+    // Unknown command
+    else {
+      response = `Unknown command: "${command}". Try: "add task", "show pending", "what's overdue"`;
+      setFeedback(response);
+      setTimeout(() => setFeedback(''), 4000);
+      speak("I didn't understand that command");
+    }
+  }, [speak, parseNaturalDate]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -257,6 +488,16 @@ export default function TaskFlowAI() {
               }}>
                 {isListening ? 'Listening...' : 'Ready'}
               </p>
+              {transcript && (
+                <p style={{
+                  fontSize: '12px',
+                  color: '#94a3b8',
+                  margin: '0 0 8px 0',
+                  fontStyle: 'italic'
+                }}>
+                  Heard: "{transcript}"
+                </p>
+              )}
               {feedback && (
                 <p style={{
                   fontSize: '13px',
@@ -691,8 +932,11 @@ export default function TaskFlowAI() {
           color: '#475569',
           fontSize: '13px'
         }}>
-          <p style={{ margin: '0' }}>
-            Voice commands: "add task [name]", "complete task [name]", "delete task [name]"
+          <p style={{ margin: '0 0 8px 0' }}>
+            Voice commands: "add task [name] [time]", "complete task [name]", "delete task [name]"
+          </p>
+          <p style={{ margin: '0', fontSize: '12px', color: '#64748b' }}>
+            Try: "show pending tasks", "what's overdue", "mark all as done", "add task buy groceries tomorrow at 3pm"
           </p>
         </div>
       </div>
