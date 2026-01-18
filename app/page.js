@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Mic, MicOff, Plus, Trash2, Check, Calendar, Search, Clock, AlertCircle, ListTodo } from 'lucide-react';
+import { Mic, MicOff, Plus, Trash2, Check, Calendar, Search, Clock, AlertCircle, ListTodo, Edit, Flag, Tag, ChevronDown, ChevronRight, FileText, Repeat, X, Save, Layers } from 'lucide-react';
 
 export default function TaskFlowAI() {
   const [tasks, setTasks] = useState([]);
@@ -11,8 +11,23 @@ export default function TaskFlowAI() {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('created');
   const [search, setSearch] = useState('');
+  const [editingTask, setEditingTask] = useState(null);
+  const [expandedTasks, setExpandedTasks] = useState(new Set());
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [taskModalData, setTaskModalData] = useState(null);
+  const [categoryFilter, setCategoryFilter] = useState('all');
+  const [priorityFilter, setPriorityFilter] = useState('all');
   const recognitionRef = useRef(null);
   const tasksRef = useRef(tasks);
+  
+  // Task templates
+  const taskTemplates = [
+    { name: 'Daily Standup', text: 'Daily standup meeting', category: 'Work', priority: 'medium' },
+    { name: 'Code Review', text: 'Review pull requests', category: 'Work', priority: 'high' },
+    { name: 'Exercise', text: '30 minutes exercise', category: 'Health', priority: 'medium' },
+    { name: 'Grocery Shopping', text: 'Buy groceries', category: 'Personal', priority: 'low' },
+    { name: 'Team Meeting', text: 'Weekly team meeting', category: 'Work', priority: 'high' }
+  ];
   
   // Keep tasksRef in sync
   useEffect(() => {
@@ -144,7 +159,13 @@ export default function TaskFlowAI() {
           text: taskText,
           completed: false,
           createdAt: new Date(),
-          dueDate: dueDate
+          dueDate: dueDate,
+          priority: 'medium',
+          category: '',
+          tags: [],
+          subtasks: [],
+          notes: '',
+          recurring: null
         }]);
         response = `Added task: ${taskText}${dueDate ? ` for ${dateText}` : ''}`;
         setFeedback(response);
@@ -319,27 +340,169 @@ export default function TaskFlowAI() {
 
   const filteredTasks = tasks
     .filter(t => (filter === 'all' ? true : filter === 'completed' ? t.completed : !t.completed))
-    .filter(t => t.text.toLowerCase().includes(search.toLowerCase()))
-    .sort((a, b) => sort === 'created'
-      ? new Date(a.createdAt) - new Date(b.createdAt)
-      : new Date(a.dueDate || 0) - new Date(b.dueDate || 0));
+    .filter(t => (categoryFilter === 'all' ? true : t.category === categoryFilter))
+    .filter(t => (priorityFilter === 'all' ? true : t.priority === priorityFilter))
+    .filter(t => {
+      const searchLower = search.toLowerCase();
+      return t.text.toLowerCase().includes(searchLower) ||
+             (t.notes && t.notes.toLowerCase().includes(searchLower)) ||
+             (t.category && t.category.toLowerCase().includes(searchLower)) ||
+             (t.tags && t.tags.some(tag => tag.toLowerCase().includes(searchLower)));
+    })
+    .sort((a, b) => {
+      if (sort === 'priority') {
+        const priorityOrder = { high: 3, medium: 2, low: 1 };
+        return (priorityOrder[b.priority] || 0) - (priorityOrder[a.priority] || 0);
+      }
+      return sort === 'created'
+        ? new Date(a.createdAt) - new Date(b.createdAt)
+        : new Date(a.dueDate || 0) - new Date(b.dueDate || 0);
+    });
+  
+  const allCategories = [...new Set(tasks.map(t => t.category).filter(Boolean))];
 
-  const addManualTask = () => {
-    const taskText = prompt('Task name:');
-    if (taskText?.trim()) {
-      const dueDate = prompt('Due date (YYYY-MM-DD HH:mm) or press Enter:');
+  const addManualTask = (template = null) => {
+    if (template) {
       const newTask = {
         id: Date.now(),
-        text: taskText,
+        text: template.text,
         completed: false,
         createdAt: new Date(),
-        dueDate: dueDate ? new Date(dueDate).toISOString().slice(0, 16) : null
+        dueDate: null,
+        priority: template.priority || 'medium',
+        category: template.category || '',
+        tags: [],
+        subtasks: [],
+        notes: '',
+        recurring: null
       };
       setTasks(prev => [...prev, newTask]);
-      setFeedback(`Added: ${taskText}`);
+      setFeedback(`Added template: ${template.name}`);
       setTimeout(() => setFeedback(''), 3000);
+      return;
+    }
+    
+    setTaskModalData({
+      text: '',
+      dueDate: null,
+      priority: 'medium',
+      category: '',
+      tags: [],
+      subtasks: [],
+      notes: '',
+      recurring: null
+    });
+    setShowTaskModal(true);
+  };
+
+  const saveTask = (taskData, taskId = null) => {
+    if (taskId) {
+      // Update existing task
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...taskData } : t));
+      setFeedback('Task updated');
+    } else {
+      // Create new task
+      const newTask = {
+        id: Date.now(),
+        ...taskData,
+        completed: false,
+        createdAt: new Date()
+      };
+      setTasks(prev => [...prev, newTask]);
+      setFeedback('Task added');
+    }
+    setTimeout(() => setFeedback(''), 3000);
+    setShowTaskModal(false);
+    setTaskModalData(null);
+    setEditingTask(null);
+  };
+
+  const toggleTaskExpand = (taskId) => {
+    setExpandedTasks(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(taskId)) {
+        newSet.delete(taskId);
+      } else {
+        newSet.add(taskId);
+      }
+      return newSet;
+    });
+  };
+
+  const addSubtask = (taskId, subtaskText) => {
+    if (!subtaskText?.trim()) return;
+    setTasks(prev => prev.map(t => 
+      t.id === taskId 
+        ? { ...t, subtasks: [...(t.subtasks || []), { id: Date.now(), text: subtaskText, completed: false }] }
+        : t
+    ));
+  };
+
+  const toggleSubtask = (taskId, subtaskId) => {
+    setTasks(prev => prev.map(t => 
+      t.id === taskId 
+        ? { ...t, subtasks: (t.subtasks || []).map(st => 
+            st.id === subtaskId ? { ...st, completed: !st.completed } : st
+          )}
+        : t
+    ));
+  };
+
+  const deleteSubtask = (taskId, subtaskId) => {
+    setTasks(prev => prev.map(t => 
+      t.id === taskId 
+        ? { ...t, subtasks: (t.subtasks || []).filter(st => st.id !== subtaskId) }
+        : t
+    ));
+  };
+
+  const getPriorityColor = (priority) => {
+    switch(priority) {
+      case 'high': return '#ef4444';
+      case 'medium': return '#f59e0b';
+      case 'low': return '#3b82f6';
+      default: return '#64748b';
     }
   };
+
+  const getPriorityLabel = (priority) => {
+    return priority ? priority.charAt(0).toUpperCase() + priority.slice(1) : 'None';
+  };
+
+  // Handle recurring tasks
+  useEffect(() => {
+    const checkRecurringTasks = () => {
+      const now = new Date();
+      setTasks(prev => prev.map(task => {
+        if (!task.recurring || task.completed) return task;
+        
+        const lastDue = task.dueDate ? new Date(task.dueDate) : new Date(task.createdAt);
+        const daysSince = Math.floor((now - lastDue) / (1000 * 60 * 60 * 24));
+        
+        let shouldRecur = false;
+        if (task.recurring === 'daily' && daysSince >= 1) shouldRecur = true;
+        else if (task.recurring === 'weekly' && daysSince >= 7) shouldRecur = true;
+        else if (task.recurring === 'monthly' && daysSince >= 30) shouldRecur = true;
+        
+        if (shouldRecur && task.completed) {
+          const newDueDate = new Date(lastDue);
+          if (task.recurring === 'daily') newDueDate.setDate(newDueDate.getDate() + 1);
+          else if (task.recurring === 'weekly') newDueDate.setDate(newDueDate.getDate() + 7);
+          else if (task.recurring === 'monthly') newDueDate.setMonth(newDueDate.getMonth() + 1);
+          
+          return {
+            ...task,
+            completed: false,
+            dueDate: newDueDate.toISOString().slice(0, 16)
+          };
+        }
+        return task;
+      }));
+    };
+    
+    const interval = setInterval(checkRecurringTasks, 60000); // Check every minute
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div style={{
@@ -514,7 +677,7 @@ export default function TaskFlowAI() {
             </div>
 
             <button
-              onClick={addManualTask}
+              onClick={() => addManualTask()}
               style={{
                 padding: '12px 20px',
                 background: '#1e40af',
@@ -539,6 +702,37 @@ export default function TaskFlowAI() {
               <Plus size={18} />
               Add Task
             </button>
+          </div>
+
+          {/* Task Templates */}
+          <div style={{ marginTop: '20px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '13px', color: '#64748b', width: '100%', marginBottom: '8px' }}>Quick Templates:</span>
+            {taskTemplates.map((template, idx) => (
+              <button
+                key={idx}
+                onClick={() => addManualTask(template)}
+                style={{
+                  padding: '6px 12px',
+                  background: '#1e293b',
+                  color: '#94a3b8',
+                  border: '1px solid #334155',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = '#334155';
+                  e.currentTarget.style.borderColor = '#3b82f6';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = '#1e293b';
+                  e.currentTarget.style.borderColor = '#334155';
+                }}
+              >
+                {template.name}
+              </button>
+            ))}
           </div>
         </div>
 
@@ -788,15 +982,50 @@ export default function TaskFlowAI() {
                   cursor: 'pointer',
                   outline: 'none'
                 }}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = '#3b82f6';
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = '#1e293b';
-                }}
               >
                 <option value="created">Created</option>
                 <option value="due">Due Date</option>
+                <option value="priority">Priority</option>
+              </select>
+
+              <select
+                value={categoryFilter}
+                onChange={e => setCategoryFilter(e.target.value)}
+                style={{
+                  padding: '10px 12px',
+                  background: '#050816',
+                  border: '1px solid #1e293b',
+                  borderRadius: '8px',
+                  color: '#f1f5f9',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                <option value="all">All Categories</option>
+                {allCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+
+              <select
+                value={priorityFilter}
+                onChange={e => setPriorityFilter(e.target.value)}
+                style={{
+                  padding: '10px 12px',
+                  background: '#050816',
+                  border: '1px solid #1e293b',
+                  borderRadius: '8px',
+                  color: '#f1f5f9',
+                  fontSize: '14px',
+                  cursor: 'pointer',
+                  outline: 'none'
+                }}
+              >
+                <option value="all">All Priorities</option>
+                <option value="high">High</option>
+                <option value="medium">Medium</option>
+                <option value="low">Low</option>
               </select>
             </div>
           </div>
@@ -813,116 +1042,596 @@ export default function TaskFlowAI() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {filteredTasks.map(task => (
-                <div
-                  key={task.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '16px',
-                    padding: '16px',
-                    background: task.completed ? '#050816' : '#0a0f1a',
-                    border: '1px solid #1e293b',
-                    borderRadius: '10px',
-                    transition: 'all 0.2s'
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!task.completed) {
-                      e.currentTarget.style.borderColor = '#3b82f6';
-                      e.currentTarget.style.background = '#0f172a';
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = '#1e293b';
-                    e.currentTarget.style.background = task.completed ? '#050816' : '#0a0f1a';
-                  }}
-                >
-                  <button
-                    onClick={() => {
-                      setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: !t.completed } : t));
-                      setFeedback(`Task ${task.completed ? 'reopened' : 'completed'}`);
-                      setTimeout(() => setFeedback(''), 3000);
-                    }}
+              {filteredTasks.map(task => {
+                const isExpanded = expandedTasks.has(task.id);
+                const isEditing = editingTask === task.id;
+                const subtasks = task.subtasks || [];
+                const completedSubtasks = subtasks.filter(st => st.completed).length;
+                
+                return (
+                  <div
+                    key={task.id}
                     style={{
-                      width: '20px',
-                      height: '20px',
-                      borderRadius: '4px',
-                      border: `2px solid ${task.completed ? '#22c55e' : '#475569'}`,
-                      background: task.completed ? '#22c55e' : 'transparent',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0
+                      background: task.completed ? '#050816' : '#0a0f1a',
+                      border: `1px solid ${task.priority === 'high' ? '#ef4444' : task.priority === 'medium' ? '#f59e0b' : '#1e293b'}`,
+                      borderRadius: '10px',
+                      transition: 'all 0.2s'
                     }}
                   >
-                    {task.completed && <Check size={12} color="white" />}
-                  </button>
-
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{
-                      margin: '0',
-                      fontSize: '15px',
-                      color: task.completed ? '#64748b' : '#f1f5f9',
-                      textDecoration: task.completed ? 'line-through' : 'none',
-                      wordBreak: 'break-word'
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      padding: '16px'
                     }}>
-                      {task.text}
-                    </p>
-                    {task.dueDate && (
+                      <button
+                        onClick={() => toggleTaskExpand(task.id)}
+                        style={{
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#64748b',
+                          cursor: 'pointer',
+                          padding: '4px',
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                      >
+                        {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setTasks(prev => prev.map(t => t.id === task.id ? { ...t, completed: !t.completed } : t));
+                          setFeedback(`Task ${task.completed ? 'reopened' : 'completed'}`);
+                          setTimeout(() => setFeedback(''), 3000);
+                        }}
+                        style={{
+                          width: '20px',
+                          height: '20px',
+                          borderRadius: '4px',
+                          border: `2px solid ${task.completed ? '#22c55e' : '#475569'}`,
+                          background: task.completed ? '#22c55e' : 'transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          flexShrink: 0
+                        }}
+                      >
+                        {task.completed && <Check size={12} color="white" />}
+                      </button>
+
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            defaultValue={task.text}
+                            onBlur={(e) => {
+                              if (e.target.value.trim() && e.target.value !== task.text) {
+                                setTasks(prev => prev.map(t => t.id === task.id ? { ...t, text: e.target.value.trim() } : t));
+                              }
+                              setEditingTask(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.target.blur();
+                              } else if (e.key === 'Escape') {
+                                setEditingTask(null);
+                              }
+                            }}
+                            autoFocus
+                            style={{
+                              width: '100%',
+                              padding: '4px 8px',
+                              background: '#050816',
+                              border: '1px solid #3b82f6',
+                              borderRadius: '4px',
+                              color: '#f1f5f9',
+                              fontSize: '15px',
+                              outline: 'none'
+                            }}
+                          />
+                        ) : (
+                          <p 
+                            onClick={() => setEditingTask(task.id)}
+                            style={{
+                              margin: '0',
+                              fontSize: '15px',
+                              color: task.completed ? '#64748b' : '#f1f5f9',
+                              textDecoration: task.completed ? 'line-through' : 'none',
+                              wordBreak: 'break-word',
+                              cursor: 'pointer'
+                            }}
+                          >
+                            {task.text}
+                          </p>
+                        )}
+                        
+                        <div style={{ display: 'flex', gap: '8px', marginTop: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {task.priority && (
+                            <span style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              background: getPriorityColor(task.priority) + '20',
+                              border: `1px solid ${getPriorityColor(task.priority)}`,
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              color: getPriorityColor(task.priority)
+                            }}>
+                              <Flag size={10} />
+                              {getPriorityLabel(task.priority)}
+                            </span>
+                          )}
+                          
+                          {task.category && (
+                            <span style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '2px 8px',
+                              background: '#1e3a8a20',
+                              border: '1px solid #3b82f6',
+                              borderRadius: '4px',
+                              fontSize: '11px',
+                              color: '#60a5fa'
+                            }}>
+                              <Tag size={10} />
+                              {task.category}
+                            </span>
+                          )}
+                          
+                          {task.dueDate && (
+                            <span style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '11px',
+                              color: '#64748b'
+                            }}>
+                              <Calendar size={10} />
+                              {new Date(task.dueDate).toLocaleDateString('en-US', {
+                                month: 'short',
+                                day: 'numeric'
+                              })}
+                            </span>
+                          )}
+                          
+                          {task.recurring && (
+                            <span style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              fontSize: '11px',
+                              color: '#64748b'
+                            }}>
+                              <Repeat size={10} />
+                              {task.recurring}
+                            </span>
+                          )}
+                          
+                          {subtasks.length > 0 && (
+                            <span style={{
+                              fontSize: '11px',
+                              color: '#64748b'
+                            }}>
+                              {completedSubtasks}/{subtasks.length} subtasks
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          setTaskModalData({ ...task });
+                          setShowTaskModal(true);
+                        }}
+                        style={{
+                          padding: '6px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#64748b',
+                          cursor: 'pointer',
+                          borderRadius: '4px'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = '#1e293b';
+                          e.currentTarget.style.color = '#60a5fa';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'transparent';
+                          e.currentTarget.style.color = '#64748b';
+                        }}
+                      >
+                        <Edit size={16} />
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          setTasks(prev => prev.filter(t => t.id !== task.id));
+                          setFeedback('Task deleted');
+                          setTimeout(() => setFeedback(''), 3000);
+                        }}
+                        style={{
+                          padding: '6px',
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#64748b',
+                          cursor: 'pointer',
+                          borderRadius: '4px'
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.background = '#1e293b';
+                          e.currentTarget.style.color = '#ef4444';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.background = 'transparent';
+                          e.currentTarget.style.color = '#64748b';
+                        }}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+
+                    {isExpanded && (
                       <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        marginTop: '6px',
-                        fontSize: '12px',
-                        color: '#64748b'
+                        padding: '0 16px 16px 16px',
+                        borderTop: '1px solid #1e293b',
+                        marginTop: '12px',
+                        paddingTop: '12px'
                       }}>
-                        <Calendar size={12} />
-                        <span>{new Date(task.dueDate).toLocaleDateString('en-US', {
-                          month: 'short',
-                          day: 'numeric',
-                          year: 'numeric'
-                        })}</span>
+                        {task.notes && (
+                          <div style={{ marginBottom: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '6px' }}>
+                              <FileText size={12} color="#64748b" />
+                              <span style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Notes</span>
+                            </div>
+                            <p style={{
+                              margin: '0',
+                              fontSize: '13px',
+                              color: '#94a3b8',
+                              padding: '8px',
+                              background: '#050816',
+                              borderRadius: '6px',
+                              whiteSpace: 'pre-wrap'
+                            }}>
+                              {task.notes}
+                            </p>
+                          </div>
+                        )}
+
+                        {subtasks.length > 0 && (
+                          <div style={{ marginBottom: '12px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                              <Layers size={12} color="#64748b" />
+                              <span style={{ fontSize: '12px', color: '#64748b', fontWeight: '500' }}>Subtasks</span>
+                            </div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                              {subtasks.map(subtask => (
+                                <div key={subtask.id} style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '8px',
+                                  padding: '6px 8px',
+                                  background: '#050816',
+                                  borderRadius: '6px'
+                                }}>
+                                  <button
+                                    onClick={() => toggleSubtask(task.id, subtask.id)}
+                                    style={{
+                                      width: '16px',
+                                      height: '16px',
+                                      borderRadius: '3px',
+                                      border: `2px solid ${subtask.completed ? '#22c55e' : '#475569'}`,
+                                      background: subtask.completed ? '#22c55e' : 'transparent',
+                                      cursor: 'pointer',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      flexShrink: 0
+                                    }}
+                                  >
+                                    {subtask.completed && <Check size={10} color="white" />}
+                                  </button>
+                                  <span style={{
+                                    flex: 1,
+                                    fontSize: '13px',
+                                    color: subtask.completed ? '#64748b' : '#f1f5f9',
+                                    textDecoration: subtask.completed ? 'line-through' : 'none'
+                                  }}>
+                                    {subtask.text}
+                                  </span>
+                                  <button
+                                    onClick={() => deleteSubtask(task.id, subtask.id)}
+                                    style={{
+                                      padding: '4px',
+                                      background: 'transparent',
+                                      border: 'none',
+                                      color: '#64748b',
+                                      cursor: 'pointer'
+                                    }}
+                                  >
+                                    <X size={14} />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                            <input
+                              type="text"
+                              placeholder="Add subtask..."
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && e.target.value.trim()) {
+                                  addSubtask(task.id, e.target.value.trim());
+                                  e.target.value = '';
+                                }
+                              }}
+                              style={{
+                                width: '100%',
+                                marginTop: '8px',
+                                padding: '6px 8px',
+                                background: '#0a0f1a',
+                                border: '1px solid #1e293b',
+                                borderRadius: '6px',
+                                color: '#f1f5f9',
+                                fontSize: '12px',
+                                outline: 'none'
+                              }}
+                            />
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
-
-                  <button
-                    onClick={() => {
-                      setTasks(prev => prev.filter(t => t.id !== task.id));
-                      setFeedback('Task deleted');
-                      setTimeout(() => setFeedback(''), 3000);
-                    }}
-                    style={{
-                      padding: '8px',
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#64748b',
-                      cursor: 'pointer',
-                      borderRadius: '6px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      flexShrink: 0,
-                      transition: 'all 0.2s'
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.background = '#1e293b';
-                      e.currentTarget.style.color = '#ef4444';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.background = 'transparent';
-                      e.currentTarget.style.color = '#64748b';
-                    }}
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
+
+        {/* Task Modal */}
+        {showTaskModal && (
+          <div style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '20px'
+          }}
+          onClick={() => {
+            setShowTaskModal(false);
+            setTaskModalData(null);
+          }}
+          >
+            <div style={{
+              background: '#0f172a',
+              border: '1px solid #1e293b',
+              borderRadius: '16px',
+              padding: '24px',
+              maxWidth: '500px',
+              width: '100%',
+              maxHeight: '90vh',
+              overflow: 'auto'
+            }}
+            onClick={(e) => e.stopPropagation()}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                <h3 style={{ margin: 0, color: '#f1f5f9', fontSize: '20px' }}>
+                  {taskModalData?.id ? 'Edit Task' : 'New Task'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowTaskModal(false);
+                    setTaskModalData(null);
+                  }}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: '#64748b',
+                    cursor: 'pointer',
+                    padding: '4px'
+                  }}
+                >
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                    Task Name *
+                  </label>
+                  <input
+                    type="text"
+                    value={taskModalData?.text || ''}
+                    onChange={(e) => setTaskModalData({ ...taskModalData, text: e.target.value })}
+                    placeholder="Enter task name"
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      background: '#050816',
+                      border: '1px solid #1e293b',
+                      borderRadius: '8px',
+                      color: '#f1f5f9',
+                      fontSize: '14px',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                      Priority
+                    </label>
+                    <select
+                      value={taskModalData?.priority || 'medium'}
+                      onChange={(e) => setTaskModalData({ ...taskModalData, priority: e.target.value })}
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        background: '#050816',
+                        border: '1px solid #1e293b',
+                        borderRadius: '8px',
+                        color: '#f1f5f9',
+                        fontSize: '14px',
+                        outline: 'none'
+                      }}
+                    >
+                      <option value="low">Low</option>
+                      <option value="medium">Medium</option>
+                      <option value="high">High</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                      Category
+                    </label>
+                    <input
+                      type="text"
+                      value={taskModalData?.category || ''}
+                      onChange={(e) => setTaskModalData({ ...taskModalData, category: e.target.value })}
+                      placeholder="Work, Personal, etc."
+                      list="categories"
+                      style={{
+                        width: '100%',
+                        padding: '10px',
+                        background: '#050816',
+                        border: '1px solid #1e293b',
+                        borderRadius: '8px',
+                        color: '#f1f5f9',
+                        fontSize: '14px',
+                        outline: 'none'
+                      }}
+                    />
+                    <datalist id="categories">
+                      {allCategories.map(cat => <option key={cat} value={cat} />)}
+                    </datalist>
+                  </div>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                    Due Date
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={taskModalData?.dueDate ? new Date(taskModalData.dueDate).toISOString().slice(0, 16) : ''}
+                    onChange={(e) => setTaskModalData({ ...taskModalData, dueDate: e.target.value ? new Date(e.target.value).toISOString().slice(0, 16) : null })}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      background: '#050816',
+                      border: '1px solid #1e293b',
+                      borderRadius: '8px',
+                      color: '#f1f5f9',
+                      fontSize: '14px',
+                      outline: 'none'
+                    }}
+                  />
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                    Recurring
+                  </label>
+                  <select
+                    value={taskModalData?.recurring || ''}
+                    onChange={(e) => setTaskModalData({ ...taskModalData, recurring: e.target.value || null })}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      background: '#050816',
+                      border: '1px solid #1e293b',
+                      borderRadius: '8px',
+                      color: '#f1f5f9',
+                      fontSize: '14px',
+                      outline: 'none'
+                    }}
+                  >
+                    <option value="">None</option>
+                    <option value="daily">Daily</option>
+                    <option value="weekly">Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', color: '#94a3b8' }}>
+                    Notes
+                  </label>
+                  <textarea
+                    value={taskModalData?.notes || ''}
+                    onChange={(e) => setTaskModalData({ ...taskModalData, notes: e.target.value })}
+                    placeholder="Add notes or description..."
+                    rows={4}
+                    style={{
+                      width: '100%',
+                      padding: '10px',
+                      background: '#050816',
+                      border: '1px solid #1e293b',
+                      borderRadius: '8px',
+                      color: '#f1f5f9',
+                      fontSize: '14px',
+                      outline: 'none',
+                      resize: 'vertical',
+                      fontFamily: 'inherit'
+                    }}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={() => {
+                      setShowTaskModal(false);
+                      setTaskModalData(null);
+                    }}
+                    style={{
+                      padding: '10px 20px',
+                      background: '#1e293b',
+                      color: '#f1f5f9',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (taskModalData?.text?.trim()) {
+                        saveTask(taskModalData, taskModalData?.id);
+                      }
+                    }}
+                    style={{
+                      padding: '10px 20px',
+                      background: '#1e40af',
+                      color: 'white',
+                      border: 'none',
+                      borderRadius: '8px',
+                      fontSize: '14px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px'
+                    }}
+                  >
+                    <Save size={16} />
+                    Save
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Footer */}
         <div style={{
