@@ -45,6 +45,85 @@ export default function TaskFlowAI() {
     }
   }, []);
 
+  // Fuzzy string matching for better command recognition
+  const fuzzyMatch = useCallback((str1, str2, threshold = 0.7) => {
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    if (longer.length === 0) return 1.0;
+    
+    const distance = levenshteinDistance(longer.toLowerCase(), shorter.toLowerCase());
+    return (longer.length - distance) / longer.length;
+  }, []);
+
+  // Levenshtein distance calculation
+  const levenshteinDistance = (str1, str2) => {
+    const matrix = [];
+    for (let i = 0; i <= str2.length; i++) {
+      matrix[i] = [i];
+    }
+    for (let j = 0; j <= str1.length; j++) {
+      matrix[0][j] = j;
+    }
+    for (let i = 1; i <= str2.length; i++) {
+      for (let j = 1; j <= str1.length; j++) {
+        if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+          matrix[i][j] = matrix[i - 1][j - 1];
+        } else {
+          matrix[i][j] = Math.min(
+            matrix[i - 1][j - 1] + 1,
+            matrix[i][j - 1] + 1,
+            matrix[i - 1][j] + 1
+          );
+        }
+      }
+    }
+    return matrix[str2.length][str1.length];
+  };
+
+  // Normalize text for better matching
+  const normalizeText = useCallback((text) => {
+    return text
+      .toLowerCase()
+      .replace(/[^\w\s]/g, '') // Remove punctuation
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
+  }, []);
+
+  // Find best matching command
+  const findBestCommand = useCallback((text, commands) => {
+    const normalized = normalizeText(text);
+    let bestMatch = null;
+    let bestScore = 0;
+    
+    for (const cmd of commands) {
+      const score = fuzzyMatch(normalized, cmd);
+      if (score > bestScore && score >= 0.6) {
+        bestScore = score;
+        bestMatch = cmd;
+      }
+    }
+    
+    return bestMatch;
+  }, [fuzzyMatch, normalizeText]);
+
+  // Find best matching task
+  const findBestTask = useCallback((searchText, taskList) => {
+    const normalized = normalizeText(searchText);
+    let bestMatch = null;
+    let bestScore = 0;
+    
+    for (const task of taskList) {
+      const taskText = normalizeText(task.text);
+      const score = fuzzyMatch(normalized, taskText);
+      if (score > bestScore && score >= 0.5) {
+        bestScore = score;
+        bestMatch = task;
+      }
+    }
+    
+    return { task: bestMatch, score: bestScore };
+  }, [fuzzyMatch, normalizeText]);
+
   // Natural language date parsing
   const parseNaturalDate = useCallback((text) => {
     const now = new Date();
@@ -121,12 +200,31 @@ export default function TaskFlowAI() {
   }, []);
 
   const handleVoiceCommand = useCallback((command) => {
-    const text = command.toLowerCase().trim();
+    const text = normalizeText(command);
+    const originalText = command.trim();
     let response = '';
 
-    // Add task with natural language parsing
-    if (text.includes("add task") || text.includes("create task") || text.includes("new task")) {
-      let taskText = text.replace(/(add|create|new)\s+task\s+(to|for)?/i, "").trim();
+    // Command patterns with fuzzy matching
+    const addTaskPatterns = ["add task", "create task", "new task", "add a task", "create a task", "make task"];
+    const completePatterns = ["complete task", "finish task", "done task", "mark complete", "mark done", "complete"];
+    const deletePatterns = ["delete task", "remove task", "delete", "remove"];
+    const pendingPatterns = ["show pending", "pending tasks", "what's pending", "pending", "show pending tasks"];
+    const overduePatterns = ["overdue", "what's overdue", "show overdue", "overdue tasks"];
+    const markAllPatterns = ["mark all", "complete all", "done all", "finish all"];
+    const showAllPatterns = ["show all", "list all", "all tasks", "show all tasks"];
+    const completedPatterns = ["show completed", "completed tasks", "completed"];
+    const countPatterns = ["how many", "task count", "how many tasks", "count tasks"];
+
+    // Check for add task command with fuzzy matching
+    const addTaskMatch = findBestCommand(text, addTaskPatterns);
+    if (addTaskMatch) {
+      // Extract task text more flexibly
+      let taskText = text;
+      for (const pattern of addTaskPatterns) {
+        const regex = new RegExp(pattern.replace(/\s+/g, '\\s+'), 'i');
+        taskText = taskText.replace(regex, '').trim();
+      }
+      taskText = taskText.replace(/\b(to|for|on|at|by)\b/gi, '').trim();
       
       // Extract date/time info
       const datePatterns = [
@@ -173,142 +271,198 @@ export default function TaskFlowAI() {
         speak(`Task added: ${taskText}${dueDate ? ` scheduled for ${dateText}` : ''}`);
       }
     }
-    // Complete task
-    else if (text.includes("complete task") || text.includes("finish task") || text.includes("done task")) {
-      const name = text.replace(/(complete|finish|done)\s+task\s+/i, "").trim();
-      setTasks(prev => {
-        const completedTasks = prev.filter(t => t.text.toLowerCase().includes(name) && !t.completed);
-        if (completedTasks.length > 0) {
-          const updated = prev.map(t => {
-            if (t.text.toLowerCase().includes(name) && !t.completed) {
-              return { ...t, completed: true };
-            }
-            return t;
-          });
-          setTimeout(() => {
-            setFeedback(`Completed: ${completedTasks[0].text}`);
-            speak(`Task completed: ${completedTasks[0].text}`);
-            setTimeout(() => setFeedback(''), 3000);
-          }, 0);
-          return updated;
-        } else {
-          setTimeout(() => {
-            setFeedback(`No matching task found: ${name}`);
-            speak("No matching task found");
-            setTimeout(() => setFeedback(''), 3000);
-          }, 0);
-          return prev;
-        }
-      });
-    }
-    // Delete task
-    else if (text.includes("delete task") || text.includes("remove task")) {
-      const name = text.replace(/(delete|remove)\s+task\s+/i, "").trim();
-      setTasks(prev => {
-        const deletedTasks = prev.filter(t => t.text.toLowerCase().includes(name));
-        if (deletedTasks.length > 0) {
-          setTimeout(() => {
-            setFeedback(`Deleted: ${deletedTasks[0].text}`);
-            speak(`Task deleted: ${deletedTasks[0].text}`);
-            setTimeout(() => setFeedback(''), 3000);
-          }, 0);
-          return prev.filter(t => !t.text.toLowerCase().includes(name));
-        } else {
-          setTimeout(() => {
-            setFeedback(`No matching task found: ${name}`);
-            speak("No matching task found");
-            setTimeout(() => setFeedback(''), 3000);
-          }, 0);
-          return prev;
-        }
-      });
-    }
-    // Show pending tasks
-    else if (text.includes("show pending") || text.includes("pending tasks") || text.includes("what's pending")) {
-      const currentTasks = tasksRef.current;
-      const pending = currentTasks.filter(t => !t.completed);
-      if (pending.length === 0) {
-        response = "No pending tasks";
-        setFeedback(response);
-        setTimeout(() => setFeedback(''), 3000);
-        speak("You have no pending tasks");
-      } else {
-        setFilter('pending');
-        const taskList = pending.slice(0, 5).map(t => t.text).join(", ");
-        response = `You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}`;
-        setFeedback(response);
-        setTimeout(() => setFeedback(''), 4000);
-        speak(`You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}. ${taskList}`);
-      }
-    }
-    // Show overdue tasks
-    else if (text.includes("overdue") || text.includes("what's overdue") || text.includes("show overdue")) {
-      const currentTasks = tasksRef.current;
-      const overdue = currentTasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && !t.completed);
-      if (overdue.length === 0) {
-        response = "No overdue tasks";
-        setFeedback(response);
-        setTimeout(() => setFeedback(''), 3000);
-        speak("You have no overdue tasks");
-      } else {
-        const taskList = overdue.slice(0, 5).map(t => t.text).join(", ");
-        response = `You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}`;
-        setFeedback(response);
-        setTimeout(() => setFeedback(''), 4000);
-        speak(`You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}. ${taskList}`);
-      }
-    }
-    // Mark all as done
-    else if (text.includes("mark all") && (text.includes("done") || text.includes("complete"))) {
-      setTasks(prev => {
-        const pending = prev.filter(t => !t.completed);
-        const updated = prev.map(t => ({ ...t, completed: true }));
-        const pendingCount = pending.length;
-        setTimeout(() => {
-          setFeedback(`Marked all ${pendingCount} tasks as completed`);
-          speak(`All ${pendingCount} tasks marked as completed`);
-          setTimeout(() => setFeedback(''), 3000);
-        }, 0);
-        return updated;
-      });
-    }
-    // Show all tasks
-    else if (text.includes("show all") || text.includes("list all") || text.includes("all tasks")) {
-      const currentTasks = tasksRef.current;
-      setFilter('all');
-      response = `Showing all ${currentTasks.length} tasks`;
-      setFeedback(response);
-      setTimeout(() => setFeedback(''), 3000);
-      speak(`You have ${currentTasks.length} total tasks`);
-    }
-    // Show completed tasks
-    else if (text.includes("show completed") || text.includes("completed tasks")) {
-      const currentTasks = tasksRef.current;
-      const completed = currentTasks.filter(t => t.completed);
-      setFilter('completed');
-      response = `Showing ${completed.length} completed tasks`;
-      setFeedback(response);
-      setTimeout(() => setFeedback(''), 3000);
-      speak(`You have ${completed.length} completed tasks`);
-    }
-    // Task count
-    else if (text.includes("how many") || text.includes("task count") || text.includes("how many tasks")) {
-      const currentTasks = tasksRef.current;
-      const pending = currentTasks.filter(t => !t.completed).length;
-      const completed = currentTasks.filter(t => t.completed).length;
-      response = `You have ${currentTasks.length} total tasks, ${pending} pending, and ${completed} completed`;
-      setFeedback(response);
-      setTimeout(() => setFeedback(''), 4000);
-      speak(`You have ${currentTasks.length} total tasks. ${pending} pending and ${completed} completed`);
-    }
-    // Unknown command
+    // Complete task with fuzzy matching
     else {
-      response = `Unknown command: "${command}". Try: "add task", "show pending", "what's overdue"`;
-      setFeedback(response);
-      setTimeout(() => setFeedback(''), 4000);
-      speak("I didn't understand that command");
+      const completeMatch = findBestCommand(text, completePatterns);
+      if (completeMatch) {
+        // Extract task name more flexibly
+        let name = text;
+        for (const pattern of completePatterns) {
+          const regex = new RegExp(pattern.replace(/\s+/g, '\\s+'), 'i');
+          name = name.replace(regex, '').trim();
+        }
+        
+        setTasks(prev => {
+          // Use fuzzy matching to find the task
+          const pendingTasks = prev.filter(t => !t.completed);
+          const match = findBestTask(name, pendingTasks);
+          
+          if (match.task && match.score >= 0.5) {
+            const updated = prev.map(t => 
+              t.id === match.task.id ? { ...t, completed: true } : t
+            );
+            setTimeout(() => {
+              setFeedback(`Completed: ${match.task.text}`);
+              speak(`Task completed: ${match.task.text}`);
+              setTimeout(() => setFeedback(''), 3000);
+            }, 0);
+            return updated;
+          } else {
+            setTimeout(() => {
+              setFeedback(`No matching task found: "${name}"`);
+              speak("No matching task found");
+              setTimeout(() => setFeedback(''), 3000);
+            }, 0);
+            return prev;
+          }
+        });
+      }
+      // Delete task with fuzzy matching
+      else {
+        const deleteMatch = findBestCommand(text, deletePatterns);
+        if (deleteMatch) {
+          let name = text;
+          for (const pattern of deletePatterns) {
+            const regex = new RegExp(pattern.replace(/\s+/g, '\\s+'), 'i');
+            name = name.replace(regex, '').trim();
+          }
+          
+          setTasks(prev => {
+            const match = findBestTask(name, prev);
+            if (match.task && match.score >= 0.5) {
+              setTimeout(() => {
+                setFeedback(`Deleted: ${match.task.text}`);
+                speak(`Task deleted: ${match.task.text}`);
+                setTimeout(() => setFeedback(''), 3000);
+              }, 0);
+              return prev.filter(t => t.id !== match.task.id);
+            } else {
+              setTimeout(() => {
+                setFeedback(`No matching task found: "${name}"`);
+                speak("No matching task found");
+                setTimeout(() => setFeedback(''), 3000);
+              }, 0);
+              return prev;
+            }
+          });
+        }
+        // Show pending tasks with fuzzy matching
+        else {
+          const pendingMatch = findBestCommand(text, pendingPatterns);
+          if (pendingMatch) {
+            const currentTasks = tasksRef.current;
+            const pending = currentTasks.filter(t => !t.completed);
+            if (pending.length === 0) {
+              response = "No pending tasks";
+              setFeedback(response);
+              setTimeout(() => setFeedback(''), 3000);
+              speak("You have no pending tasks");
+            } else {
+              setFilter('pending');
+              const taskList = pending.slice(0, 5).map(t => t.text).join(", ");
+              response = `You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}`;
+              setFeedback(response);
+              setTimeout(() => setFeedback(''), 4000);
+              speak(`You have ${pending.length} pending task${pending.length > 1 ? 's' : ''}. ${taskList}`);
+            }
+          }
+          // Show overdue tasks with fuzzy matching
+          else {
+            const overdueMatch = findBestCommand(text, overduePatterns);
+            if (overdueMatch) {
+              const currentTasks = tasksRef.current;
+              const overdue = currentTasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && !t.completed);
+              if (overdue.length === 0) {
+                response = "No overdue tasks";
+                setFeedback(response);
+                setTimeout(() => setFeedback(''), 3000);
+                speak("You have no overdue tasks");
+              } else {
+                const taskList = overdue.slice(0, 5).map(t => t.text).join(", ");
+                response = `You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}`;
+                setFeedback(response);
+                setTimeout(() => setFeedback(''), 4000);
+                speak(`You have ${overdue.length} overdue task${overdue.length > 1 ? 's' : ''}. ${taskList}`);
+              }
+            }
+            // Mark all as done with fuzzy matching
+            else {
+              const markAllMatch = findBestCommand(text, markAllPatterns);
+              if (markAllMatch && (text.includes("done") || text.includes("complete") || text.includes("finish"))) {
+                setTasks(prev => {
+                  const pending = prev.filter(t => !t.completed);
+                  const updated = prev.map(t => ({ ...t, completed: true }));
+                  const pendingCount = pending.length;
+                  setTimeout(() => {
+                    setFeedback(`Marked all ${pendingCount} tasks as completed`);
+                    speak(`All ${pendingCount} tasks marked as completed`);
+                    setTimeout(() => setFeedback(''), 3000);
+                  }, 0);
+                  return updated;
+                });
+              }
+              // Show all tasks with fuzzy matching
+              else {
+                const showAllMatch = findBestCommand(text, showAllPatterns);
+                if (showAllMatch) {
+                  const currentTasks = tasksRef.current;
+                  setFilter('all');
+                  response = `Showing all ${currentTasks.length} tasks`;
+                  setFeedback(response);
+                  setTimeout(() => setFeedback(''), 3000);
+                  speak(`You have ${currentTasks.length} total tasks`);
+                }
+                // Show completed tasks with fuzzy matching
+                else {
+                  const completedMatch = findBestCommand(text, completedPatterns);
+                  if (completedMatch) {
+                    const currentTasks = tasksRef.current;
+                    const completed = currentTasks.filter(t => t.completed);
+                    setFilter('completed');
+                    response = `Showing ${completed.length} completed tasks`;
+                    setFeedback(response);
+                    setTimeout(() => setFeedback(''), 3000);
+                    speak(`You have ${completed.length} completed tasks`);
+                  }
+                  // Task count with fuzzy matching
+                  else {
+                    const countMatch = findBestCommand(text, countPatterns);
+                    if (countMatch) {
+                      const currentTasks = tasksRef.current;
+                      const pending = currentTasks.filter(t => !t.completed).length;
+                      const completed = currentTasks.filter(t => t.completed).length;
+                      response = `You have ${currentTasks.length} total tasks, ${pending} pending, and ${completed} completed`;
+                      setFeedback(response);
+                      setTimeout(() => setFeedback(''), 4000);
+                      speak(`You have ${currentTasks.length} total tasks. ${pending} pending and ${completed} completed`);
+                    }
+                    // Unknown command - provide suggestions
+                    else {
+                      // Try to find closest command match
+                      const allCommands = [
+                        ...addTaskPatterns,
+                        ...completePatterns,
+                        ...deletePatterns,
+                        ...pendingPatterns,
+                        ...overduePatterns,
+                        ...markAllPatterns,
+                        ...showAllPatterns,
+                        ...completedPatterns,
+                        ...countPatterns
+                      ];
+                      const closest = findBestCommand(text, allCommands);
+                      
+                      if (closest) {
+                        response = `Did you mean "${closest}"? Command: "${originalText}"`;
+                        setFeedback(response);
+                        setTimeout(() => setFeedback(''), 4000);
+                        speak(`I'm not sure. Did you mean ${closest}?`);
+                      } else {
+                        response = `Unknown command: "${originalText}". Try: "add task", "show pending", "what's overdue"`;
+                        setFeedback(response);
+                        setTimeout(() => setFeedback(''), 4000);
+                        speak("I didn't understand that command");
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
-  }, [speak, parseNaturalDate]);
+  }, [speak, parseNaturalDate, normalizeText, findBestCommand, findBestTask]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -319,17 +473,59 @@ export default function TaskFlowAI() {
 
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
-      recognitionRef.current.interimResults = false;
+      recognitionRef.current.interimResults = true; // Enable for better feedback
       recognitionRef.current.lang = "en-US";
+      recognitionRef.current.maxAlternatives = 3; // Get multiple alternatives
 
       recognitionRef.current.onresult = (event) => {
-        const command = event.results[0][0].transcript;
+        // Get the best result with highest confidence
+        let bestResult = null;
+        let bestConfidence = 0;
+        
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.isFinal) {
+            for (let j = 0; j < result.length; j++) {
+              const alternative = result[j];
+              if (alternative.confidence > bestConfidence) {
+                bestConfidence = alternative.confidence;
+                bestResult = alternative.transcript;
+              }
+            }
+          }
+        }
+        
+        // Fallback to first result if no confidence scores
+        const command = bestResult || event.results[event.results.length - 1][0].transcript;
         setTranscript(command);
-        handleVoiceCommand(command);
+        
+        // Only process if confidence is reasonable or if it's the final result
+        if (bestConfidence > 0.5 || event.results[event.results.length - 1].isFinal) {
+          handleVoiceCommand(command);
+        }
       };
 
-      recognitionRef.current.onerror = () => setIsListening(false);
-      recognitionRef.current.onend = () => setIsListening(false);
+      recognitionRef.current.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setIsListening(false);
+        if (event.error === 'no-speech') {
+          setFeedback('No speech detected. Please try again.');
+          setTimeout(() => setFeedback(''), 3000);
+        } else if (event.error === 'audio-capture') {
+          setFeedback('Microphone not found. Please check your microphone.');
+          setTimeout(() => setFeedback(''), 3000);
+        } else if (event.error === 'not-allowed') {
+          setFeedback('Microphone permission denied. Please allow microphone access.');
+          setTimeout(() => setFeedback(''), 3000);
+        } else {
+          setFeedback('Recognition error. Please try again.');
+          setTimeout(() => setFeedback(''), 3000);
+        }
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
     }
   }, [handleVoiceCommand]);
 
